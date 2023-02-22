@@ -17,7 +17,6 @@
 import os
 import uproot as ur
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from bitstring import BitArray
 
@@ -60,7 +59,8 @@ def get_labels(data, count):
     energy_labels = []
     for i in range(count):
         label = np.sqrt(data["MCParticles.momentum.x"][0,0]**2 + data["MCParticles.momentum.y"][0,0]**2 + data["MCParticles.momentum.z"][0,0]**2)
-        energy_labels.append(label)
+        if len(data["ZDC_PbSi_Hits.energy"][i]) != 0:
+            energy_labels.append(label)
     
     return energy_labels
 
@@ -71,7 +71,9 @@ def get_layerIDs(data, branch, events):
     for i in range(events):
         event_cellID = np.array(data[f"{branch}.cellID"][i])
         event_layerID = bitExtract(event_cellID, 6, 8)
-        layerID.append(event_layerID)
+        if len(event_cellID) != 0:
+            layerID.append(event_layerID)
+            
     return layerID
 
 
@@ -80,7 +82,9 @@ def get_eDep(data, branch, events):
     hitsEnergy = []
     for i in range(events):
         event_hitsEnergy = np.array(data[f"{branch}.energy"][i])
-        hitsEnergy.append(event_hitsEnergy)
+        if len(event_hitsEnergy) != 0:
+            hitsEnergy.append(event_hitsEnergy)
+
     return hitsEnergy
 
 
@@ -90,7 +94,9 @@ def get_xIDs(data, branch, events):
     for i in range(events):
         event_cellID = np.array(data[f"{branch}.cellID"][i])
         event_xID = signedint(bitExtract(event_cellID, 12, 24))
-        xID.append(event_xID)
+        if len(event_cellID) != 0:
+            xID.append(event_xID)
+            
     return xID
 
 
@@ -104,7 +110,9 @@ def get_xIDs_WSi(data, branch, events):
         for i in range(len(event_cellID)):
             if event_layerID[i] in [1, 12, 23]:
                 event_xID[i] = 0.3 * event_xID[i]
-        xID.append(event_xID)
+        if len(event_xID) != 0:
+            xID.append(event_xID)
+            
     return xID
 
 
@@ -114,7 +122,9 @@ def get_yIDs(data, branch, events):
     for i in range(events):
         event_cellID = np.array(data[f"{branch}.cellID"][i])
         event_yID = signedint(bitExtract(event_cellID, 12, 36))
-        yID.append(event_yID)
+        if len(event_cellID) != 0:
+            yID.append(event_yID)
+            
     return yID
 
 
@@ -128,7 +138,9 @@ def get_yIDs_WSi(data, branch, events):
         for i in range(len(event_cellID)):
             if event_layerID[i] in [1, 12, 23]:
                 event_yID[i] = 0.3 * event_yID[i]
-        yID.append(event_yID)
+        if len(event_cellID) != 0:
+            yID.append(event_yID)
+            
     return yID
 
 
@@ -136,7 +148,7 @@ def get_yIDs_WSi(data, branch, events):
 # Get Features and Labels
 
 # %%
-nevents = 40
+nevents = 10000
 
 # %%
 hitEnergyDep = dict()
@@ -174,14 +186,15 @@ xIDs['150GeV'] = get_xIDs(samples["zdc_neutron_150GeV_10e4.edm4hep.root"], "ZDC_
 yIDs['150GeV'] = get_yIDs(samples["zdc_neutron_150GeV_10e4.edm4hep.root"], "ZDC_PbSi_Hits", nevents)
 layerIDs['150GeV'] = get_layerIDs(samples["zdc_neutron_150GeV_10e4.edm4hep.root"], "ZDC_PbSi_Hits", nevents)
 
-# %%
-labels = [get_labels(samples[key], nevents) for key in samples]
-
 # %% [markdown]
 # Merge Data
 
 # %%
 import awkward as ak
+from sklearn.model_selection import train_test_split
+
+# %%
+data_labels = np.concatenate([get_labels(samples[key], nevents) for key in samples])
 
 # %%
 hitEnergyDep_all = ak.concatenate(list(hitEnergyDep.values()), axis=0)
@@ -190,10 +203,11 @@ yIDs_all = ak.concatenate(list(yIDs.values()), axis=0)
 layerIDs_all = ak.concatenate(list(layerIDs.values()), axis=0)
 
 # %%
-data_features = [hitEnergyDep_all, xIDs_all, yIDs_all, layerIDs_all]
+hitEnergyDep_train, hitEnergyDep_test, xIDs_train, xIDs_test, yIDs_train, yIDs_test, layerIDs_train, layerIDs_test, labels_train, labels_test = train_test_split(hitEnergyDep_all, xIDs_all, yIDs_all, layerIDs_all, data_labels)
 
 # %%
-data_labels = np.concatenate(labels)
+features_train = [hitEnergyDep_train, xIDs_train, yIDs_train, layerIDs_train]
+features_test = [hitEnergyDep_test, xIDs_test, yIDs_test, layerIDs_test]
 
 # %% [markdown]
 # PyTorch Geometric
@@ -201,28 +215,23 @@ data_labels = np.concatenate(labels)
 # %%
 import torch
 from torch import nn
-from sklearn.model_selection import train_test_split
 from torch_geometric.data import Data, Dataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import knn_graph, GCNConv, global_add_pool
 
-# %%
-device = "cuda" if torch.cuda.is_available() else "cpu"
-torch.manual_seed(42)
-
 
 # %%
 class ZDCDataset(Dataset):
-    def __init__(self, data_features, data_labels, knn_k=4):
+    def __init__(self, features, labels, knn_k=4):
         super(ZDCDataset, self).__init__()
         
         self.knn_k = knn_k
         
-        self.energy = data_features[0]
-        self.xID = data_features[1]
-        self.yID = data_features[2]
-        self.layerID = data_features[3]
-        self.label = data_labels
+        self.energy = features[0]
+        self.xID = features[1]
+        self.yID = features[2]
+        self.layerID = features[3]
+        self.label = labels
 
     def len(self):
         return len(self.energy)
@@ -239,7 +248,7 @@ class ZDCDataset(Dataset):
         x = torch.stack([energy, xID, yID, layerID], axis=-1)
         
         #construct knn graph from (x, y, z) coordinates
-        edge_index = knn_graph(x[:, [1,2]], k=self.knn_k)
+        edge_index = knn_graph(x[:, [1,3]], k=self.knn_k, num_workers=48)
         
         data = Data(
             x = x,
@@ -251,60 +260,11 @@ class ZDCDataset(Dataset):
 
 
 # %%
-dataset = ZDCDataset(data_features, data_labels, knn_k=4)
-
-for i in range(10):
-    data = dataset.get(i)
-    print(data.x.shape, data.edge_index.shape, data.y)
-
-# %%
-ievent = 10
-data = dataset.get(ievent)
-    
-plt.figure(figsize=(10, 10))
-plt.scatter(data.x[:, 1], data.x[:, 2], s=1000*data.x[:, 0]);
-plt.xlabel("$x$")
-plt.ylabel("$y$")
-
-# %%
-from torch_geometric.utils import to_dense_adj
-dense_adj = to_dense_adj(data.edge_index)
-
-plt.figure(figsize=(6,5))
-plt.imshow(dense_adj[0], interpolation="none", cmap="Blues")
-plt.colorbar()
-plt.xlabel("Node index $i$")
-plt.ylabel("Node index $j$")
-plt.title("Graph adjacency matrix")
-
-# %%
-from torch_geometric.utils import to_networkx
-import networkx as nx
-
-# %%
-nxg = to_networkx(data)
-pos = {i: (data.x[i, 1], data.x[i, 2]) for i in nxg.nodes}
-
-plt.figure(figsize=(10, 10))
-ax = plt.axes()
-nx.draw_networkx(nxg, pos, with_labels=False, arrows=False, node_size=1000*data.x[:, 0], node_shape="o", ax=ax)
-ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
+dataset = ZDCDataset(features_test, labels_test, knn_k=4)
+loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=48)
 
 # %% [markdown]
-# Batching Data
-
-# %%
-loader = DataLoader(dataset, batch_size=10, shuffle=True)
-
-ibatch = 0
-for data_batched in loader:
-    print(ibatch, data_batched.x.shape, data_batched.y)
-    ibatch += 1
-    if ibatch>5:
-        break
-
-# %% [markdown]
-# Simple GCN Model
+# GCN Model
 
 # %%
 from torch_geometric.nn import GCNConv, global_add_pool
@@ -313,11 +273,11 @@ class Net(torch.nn.Module):
     def __init__(self, num_node_features=4):
         super(Net, self).__init__()
         
-        #(4 -> 32)
-        self.conv1 = GCNConv(num_node_features, 32)
+        #(4 -> 64)
+        self.conv1 = GCNConv(num_node_features, 64)
         
-        #(32 -> 1)
-        self.output = torch.nn.Linear(32, 1)
+        #(64 -> 1)
+        self.output = torch.nn.Linear(64, 1)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
@@ -341,43 +301,21 @@ class Net(torch.nn.Module):
 
 
 # %%
-net = Net()
-
-# %%
-net(data_batched)
-
-# %%
-net.state_dict().keys()
-
-# %%
-net.state_dict()["conv1.lin.weight"].shape, net.state_dict()["conv1.bias"].shape
-
-# %%
-plt.title("Convolutional layer weights")
-plt.imshow(net.state_dict()["conv1.lin.weight"].detach().numpy().T, cmap="Blues")
-plt.xlabel("feature dimension")
-plt.ylabel("output dimension")
-plt.colorbar()
-
-# %%
-plt.title("Convolutional layer bias")
-plt.imshow(net.state_dict()["conv1.bias"].unsqueeze(-1).detach().numpy(), cmap="Blues")
-plt.xlabel("output dimenion")
-plt.ylabel("feature dimension")
-plt.xticks([0])
-plt.colorbar()
-
-# %%
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 model = Net().to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+#scheduler = ExponentialLR(optimizer, gamma=0.9)
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+
+# %%
 model.train()
 losses_train = []
 
-for epoch in range(20):
+for epoch in range(1000):
     
     loss_train_epoch = []
     
@@ -395,15 +333,15 @@ for epoch in range(20):
     losses_train.append(loss_train_epoch)
     print(epoch, loss_train_epoch)
 
+    scheduler.step(loss_train_epoch)
+
+    if epoch % 100 == 0:
+        torch.save(obj=model.state_dict(), f=f"/home/dmisra/eic/gnn_state_dict_{epoch}")
+
 # %%
 plt.plot(losses_train, label="training")
 plt.ylabel("Loss")
 plt.xlabel("epoch")
-
-# %%
-model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-params = sum([np.prod(p.size()) for p in model_parameters])
-params
 
 # %%
 plt.title("Convolutional layer weights")
@@ -421,6 +359,7 @@ plt.xticks([0])
 plt.colorbar()
 
 # %%
+ievent = 42
 data = dataset.get(ievent).to(device)
 embedded_nodes = model.conv1(data.x, data.edge_index)
 
@@ -437,41 +376,6 @@ plt.xticks([0,1,2]);
 plt.figure(figsize=(10,10))
 plt.imshow(embedded_nodes.detach().cpu().numpy(), interpolation="none", cmap="Blues")
 plt.colorbar()
-
-# %%
-model_cpu = model.to('cpu')
-
-# %%
-random_indices = np.random.permutation(len(xIDs_all))
-plt.figure(figsize=(15,15))
-for iplt in range(1,26):
-    iptcl = random_indices[iplt]
-    ax = plt.subplot(5,5,iplt)
-    data = dataset.get(iptcl)
-    
-    pred = model_cpu(data).detach()[0,0].item()
-    
-    color = "blue"
-    if data.y == 1:
-        color = "red"
-    
-    nxg = to_networkx(data)
-    pos = {i: (data.x[i, 1], data.x[i, 2]) for i in nxg.nodes}
-
-    nx.draw_networkx(
-        nxg, pos,
-        with_labels=False,
-        arrows=False,
-        node_size=100*data.x[:, 0],
-        node_shape="o",
-        ax=ax
-    )
-    ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
-
-    plt.xlabel("$x$")
-    plt.ylabel("$y$")
-    plt.title("Event {}, $N_c={}$\n$y={}$, $p={:.2f}$".format(iptcl, len(xIDs_all[iptcl]), data_labels[iptcl].astype('float32'), pred))
-plt.tight_layout()
 
 # %% [markdown]
 # Predictions
