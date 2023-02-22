@@ -203,7 +203,7 @@ yIDs_all = ak.concatenate(list(yIDs.values()), axis=0)
 layerIDs_all = ak.concatenate(list(layerIDs.values()), axis=0)
 
 # %%
-hitEnergyDep_train, hitEnergyDep_test, xIDs_train, xIDs_test, yIDs_train, yIDs_test, layerIDs_train, layerIDs_test, labels_train, labels_test = train_test_split(hitEnergyDep_all, xIDs_all, yIDs_all, layerIDs_all, data_labels)
+hitEnergyDep_train, hitEnergyDep_test, xIDs_train, xIDs_test, yIDs_train, yIDs_test, layerIDs_train, layerIDs_test, labels_train, labels_test = train_test_split(hitEnergyDep_all, xIDs_all, yIDs_all, layerIDs_all, data_labels, test_size=0.2, train_size=0.8, random_state=42, shuffle=True)
 
 # %%
 features_train = [hitEnergyDep_train, xIDs_train, yIDs_train, layerIDs_train]
@@ -218,6 +218,9 @@ from torch import nn
 from torch_geometric.data import Data, Dataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import knn_graph, GCNConv, global_add_pool
+
+# %%
+torch.manual_seed(42)
 
 
 # %%
