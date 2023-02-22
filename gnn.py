@@ -260,8 +260,11 @@ class ZDCDataset(Dataset):
 
 
 # %%
-dataset = ZDCDataset(features_test, labels_test, knn_k=4)
+dataset = ZDCDataset(features_train, labels_train, knn_k=4)
 loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=48)
+
+test_dataset = ZDCDataset(features_test, labels_test, knn_k=4)
+test_loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=48)
 
 # %% [markdown]
 # GCN Model
@@ -344,38 +347,9 @@ plt.ylabel("Loss")
 plt.xlabel("epoch")
 
 # %%
-plt.title("Convolutional layer weights")
-plt.imshow(model.state_dict()["conv1.lin.weight"].detach().cpu().numpy().T, cmap="Blues")
-plt.xlabel("feature dimension")
-plt.ylabel("output dimension")
-plt.colorbar()
-
-# %%
-plt.title("Convolutional layer bias")
-plt.imshow(model.conv1.state_dict()["bias"].unsqueeze(-1).detach().cpu().numpy(), cmap="Blues")
-plt.xlabel("feature dimension")
-plt.ylabel("output dimension")
-plt.xticks([0])
-plt.colorbar()
-
-# %%
 ievent = 42
 data = dataset.get(ievent).to(device)
 embedded_nodes = model.conv1(data.x, data.edge_index)
-
-# %%
-data.x.shape, embedded_nodes.shape
-
-# %%
-plt.figure(figsize=(10,10))
-plt.imshow(data.x.cpu().numpy(), interpolation="none", cmap="Blues")
-plt.colorbar()
-plt.xticks([0,1,2]);
-
-# %%
-plt.figure(figsize=(10,10))
-plt.imshow(embedded_nodes.detach().cpu().numpy(), interpolation="none", cmap="Blues")
-plt.colorbar()
 
 # %% [markdown]
 # Predictions
@@ -397,20 +371,32 @@ plt.xlabel('Energy (GeV)')
 plt.ylabel('Count')
 plt.title('Predicted Energy Distribution')
 
+
+# %%
+def tensorIntersect(t1, t2):
+    a = set((tuple(i) for i in t1.numpy()))
+    b = set((tuple(i) for i in t2.numpy()))
+    c = a.intersection(b)
+    tensorform = torch.from_numpy(np.array(list(c)))
+
+    return tensorform
+
+
 # %%
 #Set the model in evaluation mode
-model_1.eval()
+model.eval()
 
 #Setup the inference mode context manager
 with torch.inference_mode():
-  y_preds_200GeV = model_1(features_200GeV)
-  y_preds_100GeV = model_1(features_100GeV)
-  y_preds_50GeV = model_1(features_50GeV)
-  y_preds_10GeV = model_1(features_10GeV)
+  y_preds_200GeV = model(features_150GeV)
+  y_preds_100GeV = model(features_100GeV)
+  y_preds_50GeV = model(features_50GeV)
+  y_preds_20GeV = model(features_20GeV)
+  y_preds_10GeV = model(features_10GeV)
 
 # %%
-peak_preds = norm.fit(y_preds_10GeV)[0], norm.fit(y_preds_50GeV)[0], norm.fit(y_preds_100GeV)[0], norm.fit(y_preds_200GeV)[0]
-true_peaks = [10,50,100,200]
+peak_preds = norm.fit(y_preds_10GeV)[0], norm.fit(y_preds_20GeV)[0], norm.fit(y_preds_50GeV)[0], norm.fit(y_preds_100GeV)[0], norm.fit(y_preds_150GeV)[0]
+true_peaks = [10,20,50,100,150]
 peak_preds
 
 # %%
